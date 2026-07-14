@@ -1,5 +1,5 @@
 import { mkdir, writeFile } from "node:fs/promises";
-import { dirname } from "node:path";
+import { basename, dirname } from "node:path";
 import {
   AlignmentType,
   BorderStyle,
@@ -14,25 +14,11 @@ import {
   TextRun,
   WidthType,
 } from "docx";
+import type { Step } from "@cucumber/messages";
+import { buildGherkinFeature, type BuiltGherkinStep, type ScenarioExport } from "./gherkin.js";
+import { parseGherkinSource } from "./parseGherkin.js";
 
-type JsonObject = Record<string, unknown>;
-
-export type ScenarioExport = {
-  title?: string;
-  description?: string;
-  scenarioTags?: string[];
-  steps?: ScenarioStep[];
-};
-
-type ScenarioStep = {
-  title?: string;
-  actionId?: string;
-  screenShots?: unknown[];
-  stepDataTable?: {
-    key?: string;
-    value?: unknown;
-  } | null;
-};
+export type { ScenarioExport } from "./gherkin.js";
 
 type ParsedScreenshot = {
   data: Buffer;
@@ -51,6 +37,8 @@ const TABLE_BORDER = {
   color: "D9D9D9",
 };
 
+const MONO = "Courier New";
+
 export async function generateScenarioDoc(options: GenerateScenarioDocOptions): Promise<void> {
   const scenario = options.scenario;
 
@@ -58,11 +46,20 @@ export async function generateScenarioDoc(options: GenerateScenarioDocOptions): 
     throw new Error("A parsed scenario export is required.");
   }
 
+  const built = buildGherkinFeature(scenario);
+  const parsed = parseGherkinSource(built.source, basename(options.inputPath));
+
+  if (parsed.steps.length !== built.steps.length) {
+    throw new Error(
+      `Gherkin parse step count mismatch: parsed ${parsed.steps.length}, built ${built.steps.length}`,
+    );
+  }
+
   const doc = new Document({
     sections: [
       {
         properties: {},
-        children: buildDocumentChildren(scenario, options.inputPath),
+        children: buildDocumentChildren(parsed.featureName, parsed.featureDescription, parsed.scenarioName, parsed.steps, built.steps, options.inputPath),
       },
     ],
   });
@@ -72,74 +69,87 @@ export async function generateScenarioDoc(options: GenerateScenarioDocOptions): 
   await writeFile(options.outputPath, buffer);
 }
 
-function buildDocumentChildren(scenario: ScenarioExport, inputPath: string): (Paragraph | Table)[] {
+function buildDocumentChildren(
+  featureName: string,
+  featureDescription: string,
+  scenarioName: string,
+  parsedSteps: readonly Step[],
+  builtSteps: BuiltGherkinStep[],
+  inputPath: string,
+): (Paragraph | Table)[] {
   const children: (Paragraph | Table)[] = [
     new Paragraph({
-      text: scenario.title?.trim() || "Generated Scenario",
+      text: featureName,
       heading: HeadingLevel.TITLE,
     }),
     new Paragraph({
-      children: [new TextRun({ text: `Source: ${inputPath}`, italics: true, color: "666666" })],
+      children: [
+        new TextRun({
+          text: `Source: ${basename(inputPath)}`,
+          italics: true,
+          color: "666666",
+        }),
+      ],
       spacing: { after: 240 },
+    }),
+    new Paragraph({
+      children: [
+        new TextRun({ text: "Feature: ", bold: true, font: MONO }),
+        new TextRun({ text: featureName, font: MONO }),
+      ],
+      spacing: { after: 80 },
     }),
   ];
 
-  if (scenario.description?.trim()) {
+  if (featureDescription) {
     children.push(
       new Paragraph({
-        text: scenario.description.trim(),
-        spacing: { after: 240 },
+        children: [new TextRun({ text: `  ${featureDescription}`, font: MONO })],
+        spacing: { after: 200 },
       }),
     );
-  }
-
-  if (scenario.scenarioTags?.length) {
-    children.push(
-      new Paragraph({
-        children: [new TextRun({ text: `Tags: ${scenario.scenarioTags.join(", ")}`, italics: true })],
-        spacing: { after: 240 },
-      }),
-    );
-  }
-
-  const steps = scenario.steps ?? [];
-  if (!steps.length) {
-    children.push(new Paragraph("No steps were found in this export."));
-    return children;
   }
 
   children.push(
     new Paragraph({
-      text: "Scenario",
-      heading: HeadingLevel.HEADING_1,
-      spacing: { before: 240, after: 120 },
+      children: [
+        new TextRun({ text: "  Scenario: ", bold: true, font: MONO }),
+        new TextRun({ text: scenarioName, font: MONO }),
+      ],
+      spacing: { after: 160 },
     }),
   );
 
-  steps.forEach((step, index) => {
-    children.push(...buildStepChildren(step, index + 1));
+  if (!parsedSteps.length) {
+    children.push(new Paragraph("No steps were found in this export."));
+    return children;
+  }
+
+  parsedSteps.forEach((step, index) => {
+    children.push(...buildStepChildren(step, builtSteps[index]));
   });
 
   return children;
 }
 
-function buildStepChildren(step: ScenarioStep, ordinal: number): (Paragraph | Table)[] {
+function buildStepChildren(step: Step, media: BuiltGherkinStep): (Paragraph | Table)[] {
+  const keyword = (step.keyword ?? "").trim();
   const children: (Paragraph | Table)[] = [
     new Paragraph({
       children: [
-        new TextRun({ text: `${ordinal}. `, bold: true }),
-        new TextRun({ text: step.title?.trim() || "(Untitled step)", bold: true }),
+        new TextRun({ text: `    ${keyword} `, bold: true, font: MONO }),
+        new TextRun({ text: step.text ?? "", font: MONO }),
       ],
-      spacing: { before: 180, after: 100 },
+      spacing: { before: 120, after: 80 },
     }),
   ];
 
-  const tableRows = normalizeTableRows(step.stepDataTable?.value);
+  const tableRows = step.dataTable?.rows ?? [];
   if (tableRows.length) {
-    children.push(buildDataTable(tableRows));
+    children.push(buildParsedDataTable(tableRows.map((row) => row.cells.map((cell) => cell.value))));
   }
 
-  const screenshots = (step.screenShots ?? []).map(parseScreenshot).filter(isPresent);
+  const screenshots = media.screenShots.map(parseScreenshot).filter(isPresent);
   screenshots.forEach((screenshot, screenshotIndex) => {
     children.push(
       new Paragraph({
@@ -149,7 +159,7 @@ function buildStepChildren(step: ScenarioStep, ordinal: number): (Paragraph | Ta
             italics: true,
           }),
         ],
-        spacing: { before: 120, after: 80 },
+        spacing: { before: 100, after: 60 },
       }),
       new Paragraph({
         alignment: AlignmentType.CENTER,
@@ -163,7 +173,7 @@ function buildStepChildren(step: ScenarioStep, ordinal: number): (Paragraph | Ta
             },
           }),
         ],
-        spacing: { after: 160 },
+        spacing: { after: 140 },
       }),
     );
   });
@@ -171,36 +181,13 @@ function buildStepChildren(step: ScenarioStep, ordinal: number): (Paragraph | Ta
   return children;
 }
 
-function normalizeTableRows(value: unknown): JsonObject[] {
-  if (!Array.isArray(value)) {
-    return [];
-  }
-
-  return value.filter(isJsonObject).map((row) => {
-    const cleaned: JsonObject = {};
-    Object.entries(row).forEach(([key, item]) => {
-      if (item !== "" && item !== null && item !== undefined) {
-        cleaned[key] = item;
-      }
-    });
-    return cleaned;
-  });
-}
-
-function buildDataTable(rows: JsonObject[]): Table {
-  const columns = collectColumns(rows);
-  const header = new TableRow({
-    tableHeader: true,
-    children: columns.map((column) =>
-      new TableCell({
-        shading: { fill: "F2F2F2" },
-        children: [new Paragraph({ children: [new TextRun({ text: formatHeader(column), bold: true })] })],
-      }),
-    ),
-  });
+function buildParsedDataTable(rows: string[][]): Table {
+  const columnCount = Math.max(...rows.map((row) => row.length), 1);
+  const columnWidth = Math.floor(9000 / columnCount);
 
   return new Table({
-    width: { size: 100, type: WidthType.PERCENTAGE },
+    width: { size: 60, type: WidthType.PERCENTAGE },
+    columnWidths: Array.from({ length: columnCount }, () => columnWidth),
     borders: {
       top: TABLE_BORDER,
       bottom: TABLE_BORDER,
@@ -209,29 +196,31 @@ function buildDataTable(rows: JsonObject[]): Table {
       insideHorizontal: TABLE_BORDER,
       insideVertical: TABLE_BORDER,
     },
-    rows: [
-      header,
-      ...rows.map(
-        (row) =>
-          new TableRow({
-            children: columns.map(
-              (column) =>
-                new TableCell({
-                  children: [new Paragraph(formatCell(row[column]))],
+    rows: rows.map(
+      (row, rowIndex) =>
+        new TableRow({
+          tableHeader: rowIndex === 0,
+          children: Array.from({ length: columnCount }, (_, columnIndex) => {
+            const value = row[columnIndex] ?? "";
+            return new TableCell({
+              shading: rowIndex === 0 ? { fill: "F2F2F2" } : undefined,
+              width: { size: columnWidth, type: WidthType.DXA },
+              children: [
+                new Paragraph({
+                  children: [
+                    new TextRun({
+                      text: value,
+                      bold: rowIndex === 0,
+                      font: MONO,
+                    }),
+                  ],
                 }),
-            ),
+              ],
+            });
           }),
-      ),
-    ],
+        }),
+    ),
   });
-}
-
-function collectColumns(rows: JsonObject[]): string[] {
-  const seen = new Set<string>();
-  rows.forEach((row) => {
-    Object.keys(row).forEach((key) => seen.add(key));
-  });
-  return [...seen];
 }
 
 function parseScreenshot(value: unknown): ParsedScreenshot | null {
@@ -249,26 +238,6 @@ function parseScreenshot(value: unknown): ParsedScreenshot | null {
     type,
     data: Buffer.from(match[2], "base64"),
   };
-}
-
-function formatHeader(value: string): string {
-  return value.replace(/([a-z])([A-Z])/g, "$1 $2").replace(/^./, (char) => char.toUpperCase());
-}
-
-function formatCell(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
-    return String(value);
-  }
-
-  return JSON.stringify(value);
-}
-
-function isJsonObject(value: unknown): value is JsonObject {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPresent<T>(value: T | null | undefined): value is T {

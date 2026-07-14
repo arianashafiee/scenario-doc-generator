@@ -17,6 +17,8 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@cucumber/gherkin": "^41.0.0",
+    "@cucumber/messages": "^34.0.2",
     "commander": "^15.0.0",
     "docx": "^9.7.1"
   },
