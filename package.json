@@ -9,7 +9,7 @@
   "scripts": {
     "build": "tsc",
     "start": "tsx src/index.ts",
-    "generate:sample": "tsx src/index.ts /Users/arianashafiee/Downloads/scenario-actions-1784040232462.json --out output/sample-scenario.docx",
+    "generate:sample": "tsx src/index.ts fixtures/scenario-actions-1784040232462.json --out output/sample-scenario.docx",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [],

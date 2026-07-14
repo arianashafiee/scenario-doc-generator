@@ -15,12 +15,12 @@ npm install
 npm run generate:sample
 ```
 
-The sample command reads `/Users/arianashafiee/Downloads/scenario-actions-1784040232462.json` and writes `output/sample-scenario.docx`.
+The sample command reads `fixtures/scenario-actions-1784040232462.json` and writes `output/sample-scenario.docx`.
 
 To run against another export:
 
 ```bash
-npm start -- /Users/arianashafiee/Downloads/scenario-actions-1784040232462.json --out output/scenario.docx
+npm start -- /path/to/scenario-actions.json --out output/scenario.docx
 ```
 
 ## Screenshot Retrieval
