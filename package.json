@@ -1,0 +1,28 @@
+{
+  "name": "scenario-doc-generator",
+  "version": "1.0.0",
+  "description": "Generate Word documents from scenario action exports.",
+  "main": "dist/index.js",
+  "bin": {
+    "scenario-doc-generator": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "tsx src/index.ts",
+    "generate:sample": "tsx src/index.ts /Users/arianashafiee/Downloads/scenario-actions-1784040232462.json --out output/sample-scenario.docx",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "commander": "^15.0.0",
+    "docx": "^9.7.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.1.1",
+    "tsx": "^4.23.1",
+    "typescript": "^7.0.2"
+  }
+}
