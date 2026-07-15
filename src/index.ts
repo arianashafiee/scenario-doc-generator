@@ -11,10 +11,10 @@ program
   .name("scenario-doc-generator")
   .description("Generate a Word document from a scenario action JSON export.")
   .argument("<input>", "Path to a scenario actions JSON export")
-  .option("-o, --out <path>", "Output .docx path", "output/scenario.docx")
-  .action(async (input: string, options: { out: string }) => {
+  .option("-o, --out <path>", "Output .docx path (defaults to a timestamped file)")
+  .action(async (input: string, options: { out?: string }) => {
     const inputPath = resolve(input);
-    const outputPath = resolve(options.out);
+    const outputPath = resolve(options.out ?? defaultOutputPath());
     const scenario = await readScenario(inputPath);
 
     await generateScenarioDoc({
@@ -45,4 +45,11 @@ async function readScenario(path: string): Promise<ScenarioExport> {
 
 function isScenarioExport(value: unknown): value is ScenarioExport {
   return typeof value === "object" && value !== null && Array.isArray((value as ScenarioExport).steps);
+}
+
+function defaultOutputPath(): string {
+  const now = new Date();
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const stamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+  return `output/scenario-${stamp}.docx`;
 }

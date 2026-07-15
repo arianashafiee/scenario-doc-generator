@@ -1,0 +1,92 @@
+{
+  "title": "",
+  "description": "",
+  "scenarioTags": [],
+  "pages": [
+    {
+      "title": "Shop",
+      "url": "https://shop.example.test/checkout"
+    }
+  ],
+  "steps": [
+    {
+      "title": "I navigate to the main application page.",
+      "actionId": "n1",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "navigation"
+      }
+    },
+    {
+      "title": "I enter \"Ada\" into the element \"role:textbox[name='First Name']\".",
+      "actionId": "i1",
+      "screenShots": [],
+      "stepDataTable": {
+        "key": "inputData",
+        "value": [
+          {
+            "textValue": "Ada",
+            "variableName": ""
+          }
+        ]
+      },
+      "stepEvent": {
+        "type": "input"
+      }
+    },
+    {
+      "title": "I enter \"true\" into the element \"css=input[role=\\\"switch\\\"]\".",
+      "actionId": "i2",
+      "screenShots": [],
+      "stepDataTable": {
+        "key": "inputData",
+        "value": [
+          {
+            "textValue": "true",
+            "variableName": ""
+          }
+        ]
+      },
+      "stepEvent": {
+        "type": "input"
+      }
+    },
+    {
+      "title": "I click on the element \"role:button[name='Continue'; exact=true]\".",
+      "actionId": "c1",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "click"
+      }
+    },
+    {
+      "title": "I see Accordion \u2014 \"Payment Method\".",
+      "actionId": "s1",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "stateChange"
+      }
+    },
+    {
+      "title": "I click on the element \"text['Credit Card'; exact=true]\".",
+      "actionId": "c2",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "click"
+      }
+    },
+    {
+      "title": "I see Accordion \u2014 \"Payment Method\".",
+      "actionId": "s2",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "stateChange"
+      }
+    }
+  ]
+}

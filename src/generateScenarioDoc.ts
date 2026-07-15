@@ -1,28 +1,31 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import { basename, dirname } from "node:path";
-import {
-  AlignmentType,
-  BorderStyle,
-  Document,
-  HeadingLevel,
-  ImageRun,
-  Packer,
-  Paragraph,
-  Table,
-  TableCell,
-  TableRow,
-  TextRun,
-  WidthType,
-} from "docx";
-import type { Step } from "@cucumber/messages";
-import { buildGherkinFeature, type BuiltGherkinStep, type ScenarioExport } from "./gherkin.js";
-import { parseGherkinSource } from "./parseGherkin.js";
+import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, dirname, join, resolve } from "node:path";
+import { spawn } from "node:child_process";
 
-export type { ScenarioExport } from "./gherkin.js";
+type JsonObject = Record<string, unknown>;
+
+export type ScenarioExport = {
+  title?: string;
+  description?: string;
+  scenarioTags?: string[];
+  pages?: Array<{ title?: string; url?: string }>;
+  steps?: ScenarioStep[];
+};
+
+type ScenarioStep = {
+  title?: string;
+  actionId?: string;
+  screenShots?: unknown[];
+  stepDataTable?: {
+    key?: string;
+    value?: unknown;
+  } | null;
+};
 
 type ParsedScreenshot = {
   data: Buffer;
-  type: "jpg" | "png" | "gif" | "bmp";
+  extension: "jpg" | "png" | "gif" | "bmp";
 };
 
 export type GenerateScenarioDocOptions = {
@@ -31,14 +34,24 @@ export type GenerateScenarioDocOptions = {
   scenario?: ScenarioExport;
 };
 
-const TABLE_BORDER = {
-  style: BorderStyle.SINGLE,
-  size: 1,
-  color: "D9D9D9",
+type ManifestStep = {
+  text: string;
+  table: string[][];
+  screenshotPaths: string[];
 };
 
-const MONO = "Courier New";
+type DocManifest = {
+  title: string;
+  description: string;
+  tags: string[];
+  sourceLabel: string;
+  steps: ManifestStep[];
+};
 
+/**
+ * Build the Word doc in the sample-A layout:
+ * title / description / tags, then each step title, Text Value table, screenshots.
+ */
 export async function generateScenarioDoc(options: GenerateScenarioDocOptions): Promise<void> {
   const scenario = options.scenario;
 
@@ -46,180 +59,156 @@ export async function generateScenarioDoc(options: GenerateScenarioDocOptions): 
     throw new Error("A parsed scenario export is required.");
   }
 
-  const built = buildGherkinFeature(scenario);
-  const parsed = parseGherkinSource(built.source, basename(options.inputPath));
-
-  if (parsed.steps.length !== built.steps.length) {
-    throw new Error(
-      `Gherkin parse step count mismatch: parsed ${parsed.steps.length}, built ${built.steps.length}`,
-    );
+  const tempDir = await mkdtemp(join(tmpdir(), "scenario-doc-"));
+  try {
+    const manifest = await buildManifest(scenario, options.inputPath, tempDir);
+    const manifestPath = join(tempDir, "manifest.json");
+    await writeFile(manifestPath, JSON.stringify(manifest, null, 2));
+    await mkdir(dirname(options.outputPath), { recursive: true });
+    await runPythonBuilder(manifestPath, options.outputPath);
+  } finally {
+    await rm(tempDir, { recursive: true, force: true });
   }
-
-  const doc = new Document({
-    sections: [
-      {
-        properties: {},
-        children: buildDocumentChildren(parsed.featureName, parsed.featureDescription, parsed.scenarioName, parsed.steps, built.steps, options.inputPath),
-      },
-    ],
-  });
-
-  const buffer = await Packer.toBuffer(doc);
-  await mkdir(dirname(options.outputPath), { recursive: true });
-  await writeFile(options.outputPath, buffer);
 }
 
-function buildDocumentChildren(
-  featureName: string,
-  featureDescription: string,
-  scenarioName: string,
-  parsedSteps: readonly Step[],
-  builtSteps: BuiltGherkinStep[],
+async function buildManifest(
+  scenario: ScenarioExport,
   inputPath: string,
-): (Paragraph | Table)[] {
-  const children: (Paragraph | Table)[] = [
-    new Paragraph({
-      text: featureName,
-      heading: HeadingLevel.TITLE,
-    }),
-    new Paragraph({
-      children: [
-        new TextRun({
-          text: `Source: ${basename(inputPath)}`,
-          italics: true,
-          color: "666666",
-        }),
-      ],
-      spacing: { after: 240 },
-    }),
-    new Paragraph({
-      children: [
-        new TextRun({ text: "Feature: ", bold: true, font: MONO }),
-        new TextRun({ text: featureName, font: MONO }),
-      ],
-      spacing: { after: 80 },
-    }),
-  ];
+  tempDir: string,
+): Promise<DocManifest> {
+  const steps: ManifestStep[] = [];
+  const rawSteps = scenario.steps ?? [];
 
-  if (featureDescription) {
-    children.push(
-      new Paragraph({
-        children: [new TextRun({ text: `  ${featureDescription}`, font: MONO })],
-        spacing: { after: 200 },
-      }),
-    );
+  for (let index = 0; index < rawSteps.length; index += 1) {
+    const step = rawSteps[index];
+    const screenshotPaths: string[] = [];
+    const screenshots = (step.screenShots ?? []).map(parseScreenshot).filter(isPresent);
+
+    for (let shotIndex = 0; shotIndex < screenshots.length; shotIndex += 1) {
+      const screenshot = screenshots[shotIndex];
+      const filePath = join(tempDir, `step-${index + 1}-${shotIndex + 1}.${screenshot.extension}`);
+      await writeFile(filePath, screenshot.data);
+      screenshotPaths.push(filePath);
+    }
+
+    steps.push({
+      text: cleanStepTitle(step.title),
+      table: buildVariableTable(step),
+      screenshotPaths,
+    });
   }
 
-  children.push(
-    new Paragraph({
-      children: [
-        new TextRun({ text: "  Scenario: ", bold: true, font: MONO }),
-        new TextRun({ text: scenarioName, font: MONO }),
-      ],
-      spacing: { after: 160 },
-    }),
-  );
-
-  if (!parsedSteps.length) {
-    children.push(new Paragraph("No steps were found in this export."));
-    return children;
-  }
-
-  parsedSteps.forEach((step, index) => {
-    children.push(...buildStepChildren(step, builtSteps[index]));
-  });
-
-  return children;
+  return {
+    title: resolveTitle(scenario),
+    description: scenario.description?.trim() ?? "",
+    tags: (scenario.scenarioTags ?? []).map((tag) => String(tag).trim()).filter(Boolean),
+    sourceLabel: basename(inputPath),
+    steps,
+  };
 }
 
-function buildStepChildren(step: Step, media: BuiltGherkinStep): (Paragraph | Table)[] {
-  const keyword = (step.keyword ?? "").trim();
-  const children: (Paragraph | Table)[] = [
-    new Paragraph({
-      children: [
-        new TextRun({ text: `    ${keyword} `, bold: true, font: MONO }),
-        new TextRun({ text: step.text ?? "", font: MONO }),
-      ],
-      spacing: { before: 120, after: 80 },
-    }),
-  ];
-
-  const tableRows = step.dataTable?.rows ?? [];
-  if (tableRows.length) {
-    children.push(buildParsedDataTable(tableRows.map((row) => row.cells.map((cell) => cell.value))));
+function cleanStepTitle(title: string | undefined): string {
+  const trimmed = (title ?? "").trim();
+  if (!trimmed) {
+    return "(Untitled step)";
   }
 
-  const screenshots = media.screenShots.map(parseScreenshot).filter(isPresent);
-  screenshots.forEach((screenshot, screenshotIndex) => {
-    children.push(
-      new Paragraph({
-        children: [
-          new TextRun({
-            text: `Screenshot${screenshots.length > 1 ? ` ${screenshotIndex + 1}` : ""}`,
-            italics: true,
-          }),
-        ],
-        spacing: { before: 100, after: 60 },
-      }),
-      new Paragraph({
-        alignment: AlignmentType.CENTER,
-        children: [
-          new ImageRun({
-            data: screenshot.data,
-            type: screenshot.type,
-            transformation: {
-              width: 560,
-              height: 315,
-            },
-          }),
-        ],
-        spacing: { after: 140 },
-      }),
-    );
-  });
+  // Drop a leading Gherkin keyword (Given/When/Then/And/But/*) if present.
+  const withoutKeyword = trimmed.replace(/^(Given|When|Then|And|But|\*)\s+/i, "").trim() || trimmed;
 
-  return children;
+  // Capitalize the first letter so sentences read like sample A.
+  return withoutKeyword.charAt(0).toUpperCase() + withoutKeyword.slice(1);
 }
 
-function buildParsedDataTable(rows: string[][]): Table {
-  const columnCount = Math.max(...rows.map((row) => row.length), 1);
-  const columnWidth = Math.floor(9000 / columnCount);
+function buildVariableTable(step: ScenarioStep): string[][] {
+  const value = step.stepDataTable?.value;
+  if (!Array.isArray(value)) {
+    return [];
+  }
 
-  return new Table({
-    width: { size: 60, type: WidthType.PERCENTAGE },
-    columnWidths: Array.from({ length: columnCount }, () => columnWidth),
-    borders: {
-      top: TABLE_BORDER,
-      bottom: TABLE_BORDER,
-      left: TABLE_BORDER,
-      right: TABLE_BORDER,
-      insideHorizontal: TABLE_BORDER,
-      insideVertical: TABLE_BORDER,
-    },
-    rows: rows.map(
-      (row, rowIndex) =>
-        new TableRow({
-          tableHeader: rowIndex === 0,
-          children: Array.from({ length: columnCount }, (_, columnIndex) => {
-            const value = row[columnIndex] ?? "";
-            return new TableCell({
-              shading: rowIndex === 0 ? { fill: "F2F2F2" } : undefined,
-              width: { size: columnWidth, type: WidthType.DXA },
-              children: [
-                new Paragraph({
-                  children: [
-                    new TextRun({
-                      text: value,
-                      bold: rowIndex === 0,
-                      font: MONO,
-                    }),
-                  ],
-                }),
-              ],
-            });
-          }),
-        }),
-    ),
+  const columns = value
+    .filter(isJsonObject)
+    .map((row) => {
+      const raw = row.textValue ?? row.value;
+      if (raw === null || raw === undefined || raw === "") {
+        return null;
+      }
+      const provided = typeof row.variableName === "string" ? row.variableName.trim() : "";
+      const header = provided || deriveVariableName(step.title ?? "") || "value";
+      return { header, value: String(raw) };
+    })
+    .filter(isPresent);
+
+  if (!columns.length) {
+    return [];
+  }
+
+  // Header = variable name, value below it. Multiple inputs become multiple columns.
+  return [columns.map((c) => c.header), columns.map((c) => c.value)];
+}
+
+function deriveVariableName(title: string): string {
+  const patterns = [
+    /\[name=['"]([^'"]+)['"]/i,
+    /label\['([^']+)'/i,
+    /name=["']([^"']+)["']/i,
+    /role=["']([^"']+)["']/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = pattern.exec(title);
+    if (match?.[1]) {
+      return slugify(match[1]);
+    }
+  }
+
+  return "value";
+}
+
+function slugify(value: string): string {
+  return value
+    .replace(/\*/g, "")
+    .replace(/[^a-zA-Z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .replace(/_+/g, "_")
+    .toLowerCase();
+}
+
+function resolveTitle(scenario: ScenarioExport): string {
+  const explicit = scenario.title?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const pageTitle = scenario.pages?.find((page) => page.title?.trim())?.title?.trim();
+  if (pageTitle) {
+    return pageTitle;
+  }
+
+  return "Generated Scenario";
+}
+
+function runPythonBuilder(manifestPath: string, outputPath: string): Promise<void> {
+  const scriptPath = resolve(process.cwd(), "scripts/build_docx.py");
+
+  return new Promise((resolvePromise, reject) => {
+    const child = spawn("python3", [scriptPath, manifestPath, "--out", outputPath], {
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+
+    let stderr = "";
+    child.stderr.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString();
+    });
+
+    child.on("error", reject);
+    child.on("close", (code) => {
+      if (code === 0) {
+        resolvePromise();
+        return;
+      }
+      reject(new Error(`python-docx builder failed (${code}): ${stderr || "unknown error"}`));
+    });
   });
 }
 
@@ -228,16 +217,22 @@ function parseScreenshot(value: unknown): ParsedScreenshot | null {
     return null;
   }
 
-  const match = /^data:image\/(png|jpeg|jpg|gif|bmp);base64,(.+)$/i.exec(value);
+  const match = /^data:image\/(png|jpeg|jpg|gif|bmp);base64,([\s\S]+)$/i.exec(value.trim());
   if (!match) {
     return null;
   }
 
-  const type = match[1].toLowerCase() === "jpeg" ? "jpg" : (match[1].toLowerCase() as ParsedScreenshot["type"]);
+  const extension =
+    match[1].toLowerCase() === "jpeg" ? "jpg" : (match[1].toLowerCase() as ParsedScreenshot["extension"]);
+
   return {
-    type,
+    extension,
     data: Buffer.from(match[2], "base64"),
   };
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function isPresent<T>(value: T | null | undefined): value is T {

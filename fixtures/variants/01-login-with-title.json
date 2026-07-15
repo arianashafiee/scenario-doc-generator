@@ -1,0 +1,83 @@
+{
+  "title": "Customer portal login",
+  "description": "Sign in with email and password, then land on the dashboard.",
+  "scenarioTags": [
+    "smoke",
+    "auth"
+  ],
+  "pages": [
+    {
+      "title": "Portal",
+      "url": "https://example.test/login"
+    }
+  ],
+  "steps": [
+    {
+      "title": "I navigate to the main application page.",
+      "actionId": "nav1",
+      "screenShots": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+      ],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "navigation"
+      }
+    },
+    {
+      "title": "I enter \"user@example.com\" into the element \"role:textbox[name='Email']\".",
+      "actionId": "in1",
+      "screenShots": [],
+      "stepDataTable": {
+        "key": "inputData",
+        "value": [
+          {
+            "type": "text",
+            "textValue": "user@example.com",
+            "variableName": ""
+          }
+        ]
+      },
+      "stepEvent": {
+        "type": "input"
+      }
+    },
+    {
+      "title": "I enter the password \"********\" into the element \"role:textbox[name='Password']\".",
+      "actionId": "in2",
+      "screenShots": [],
+      "stepDataTable": {
+        "key": "inputData",
+        "value": [
+          {
+            "type": "text",
+            "textValue": "Secret123!",
+            "variableName": "password"
+          }
+        ]
+      },
+      "stepEvent": {
+        "type": "input"
+      }
+    },
+    {
+      "title": "I click on the element \"role:button[name='Sign In'; exact=true]\".",
+      "actionId": "clk1",
+      "screenShots": [
+        "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+      ],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "click"
+      }
+    },
+    {
+      "title": "I see Screen \u2014 \"Dashboard\".",
+      "actionId": "st1",
+      "screenShots": [],
+      "stepDataTable": null,
+      "stepEvent": {
+        "type": "stateChange"
+      }
+    }
+  ]
+}

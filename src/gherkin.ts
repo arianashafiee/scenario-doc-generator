@@ -30,65 +30,186 @@ export type GherkinTable = {
 };
 
 export type BuiltGherkinStep = {
-  keyword: "Given" | "When" | "Then" | "And";
+  keyword: "Given" | "When" | "Then" | "And" | "But";
   text: string;
   table?: GherkinTable;
   screenShots: unknown[];
+  /** True when the step was synthesized for Gherkin structure (no JSON screenshot). */
+  synthetic?: boolean;
+};
+
+export type BuiltScenario = {
+  name: string;
+  steps: BuiltGherkinStep[];
+};
+
+export type BuiltRule = {
+  name: string;
+  scenarios: BuiltScenario[];
 };
 
 export type BuiltGherkinFeature = {
   featureTitle: string;
   featureDescription: string;
-  scenarioTitle: string;
+  rules: BuiltRule[];
   source: string;
+  /** Flat ordered steps for screenshot handling / validation helpers. */
   steps: BuiltGherkinStep[];
 };
 
 /**
  * Convert a scenario actions export into Gherkin source text.
- * The source is meant to be parsed by @cucumber/gherkin.
+ * Structure follows Cucumber reference style:
+ * Feature -> Rule -> Scenario -> Given/When/Then steps.
  */
 export function buildGherkinFeature(scenario: ScenarioExport): BuiltGherkinFeature {
   const featureTitle = resolveFeatureTitle(scenario);
   const featureDescription = resolveFeatureDescription(scenario, featureTitle);
-  const scenarioTitle = `Complete ${featureTitle}`;
   const rawSteps = scenario.steps ?? [];
-  const keywords = assignKeywords(rawSteps);
+  const segments = splitIntoRuleSegments(rawSteps);
+  const rules = segments.map((segment, index) => buildRule(segment, index, segments));
 
-  const steps: BuiltGherkinStep[] = rawSteps.map((step, index) => {
-    const table = extractInputTable(step);
-    return {
-      keyword: keywords[index],
-      text: applyPlaceholder(step.title?.trim() || "(Untitled step)", table),
-      table,
-      screenShots: step.screenShots ?? [],
-    };
-  });
+  const lines = [`Feature: ${featureTitle}`, `  ${featureDescription}`, ""];
 
-  const lines = [
-    `Feature: ${featureTitle}`,
-    `  ${featureDescription}`,
-    "",
-    `  Scenario: ${scenarioTitle}`,
-  ];
-
-  for (const step of steps) {
-    lines.push(`    ${step.keyword} ${step.text}`);
-    if (step.table) {
-      lines.push(`      | ${escapeCell(step.table.header)} |`);
-      lines.push(`      | ${escapeCell(step.table.value)} |`);
+  for (const rule of rules) {
+    lines.push(`  Rule: ${rule.name}`);
+    lines.push("");
+    for (const scenarioBlock of rule.scenarios) {
+      lines.push(`    Scenario: ${scenarioBlock.name}`);
+      for (const step of scenarioBlock.steps) {
+        lines.push(`      ${step.keyword} ${step.text}`);
+        if (step.table) {
+          lines.push(`        | ${escapeCell(step.table.header)} |`);
+          lines.push(`        | ${escapeCell(step.table.value)} |`);
+        }
+      }
+      lines.push("");
     }
   }
 
-  lines.push("");
+  const steps = rules.flatMap((rule) => rule.scenarios.flatMap((scenarioBlock) => scenarioBlock.steps));
 
   return {
     featureTitle,
     featureDescription,
-    scenarioTitle,
-    source: lines.join("\n"),
+    rules,
+    source: lines.join("\n").trimEnd() + "\n",
     steps,
   };
+}
+
+function splitIntoRuleSegments(steps: ScenarioStep[]): ScenarioStep[][] {
+  if (!steps.length) {
+    return [];
+  }
+
+  const segments: ScenarioStep[][] = [];
+  let current: ScenarioStep[] = [];
+
+  for (const step of steps) {
+    current.push(step);
+    if (isThenStep(step)) {
+      segments.push(current);
+      current = [];
+    }
+  }
+
+  if (current.length) {
+    segments.push(current);
+  }
+
+  return segments;
+}
+
+function buildRule(segment: ScenarioStep[], index: number, allSegments: ScenarioStep[][]): BuiltRule {
+  const outcome = extractOutcomeName(segment[segment.length - 1]);
+  const previousOutcome =
+    index > 0 ? extractOutcomeName(allSegments[index - 1][allSegments[index - 1].length - 1]) : undefined;
+
+  const ruleName = outcome ?? previousOutcome ?? `Flow section ${index + 1}`;
+  const scenarioName = outcome
+    ? `Reach ${outcome}`
+    : previousOutcome
+      ? `Continue from ${previousOutcome}`
+      : `Complete section ${index + 1}`;
+
+  const steps = buildScenarioSteps(segment, index === 0, previousOutcome);
+
+  return {
+    name: ruleName,
+    scenarios: [
+      {
+        name: scenarioName,
+        steps,
+      },
+    ],
+  };
+}
+
+function buildScenarioSteps(
+  segment: ScenarioStep[],
+  isFirstRule: boolean,
+  previousOutcome: string | undefined,
+): BuiltGherkinStep[] {
+  const steps: BuiltGherkinStep[] = [];
+
+  if (!isFirstRule && previousOutcome) {
+    steps.push({
+      keyword: "Given",
+      text: `I am on the "${previousOutcome}" step.`,
+      screenShots: [],
+      synthetic: true,
+    });
+  }
+
+  const actionSteps = segment.map((step) => {
+    const table = extractInputTable(step);
+    return {
+      raw: step,
+      text: applyPlaceholder(step.title?.trim() || "(Untitled step)", table),
+      table,
+      screenShots: step.screenShots ?? [],
+      isThen: isThenStep(step),
+    };
+  });
+
+  let introducedGiven = !isFirstRule && Boolean(previousOutcome);
+  let needWhen = introducedGiven;
+
+  for (const action of actionSteps) {
+    let keyword: BuiltGherkinStep["keyword"];
+
+    if (action.isThen) {
+      keyword = "Then";
+      needWhen = true;
+    } else if (!introducedGiven) {
+      keyword = "Given";
+      introducedGiven = true;
+      needWhen = true;
+    } else if (needWhen) {
+      keyword = "When";
+      needWhen = false;
+    } else {
+      keyword = "And";
+    }
+
+    steps.push({
+      keyword,
+      text: action.text,
+      table: action.table,
+      screenShots: action.screenShots,
+    });
+  }
+
+  return steps;
+}
+
+function extractOutcomeName(step: ScenarioStep | undefined): string | undefined {
+  if (!step) {
+    return undefined;
+  }
+  const match = /^I see (?:Screen|Accordion) — "(.+)"\.$/.exec(step.title?.trim() ?? "");
+  return match?.[1];
 }
 
 function resolveFeatureTitle(scenario: ScenarioExport): string {
@@ -117,10 +238,13 @@ function resolveFeatureDescription(scenario: ScenarioExport, featureTitle: strin
 
   const screens = uniqueScreenNames(scenario.steps ?? []);
   if (screens.length) {
-    return `Complete the ${featureTitle} flow across ${screens.join(", ")}.`;
+    return [
+      `Business rules for ${featureTitle} are grouped below.`,
+      `Each Rule covers one screen or accordion outcome: ${screens.join(", ")}.`,
+    ].join(" ");
   }
 
-  return `Complete the ${featureTitle} flow.`;
+  return `Business rules and examples for ${featureTitle}.`;
 }
 
 function uniqueScreenNames(steps: ScenarioStep[]): string[] {
@@ -128,49 +252,15 @@ function uniqueScreenNames(steps: ScenarioStep[]): string[] {
   const seen = new Set<string>();
 
   for (const step of steps) {
-    const match = /^I see (?:Screen|Accordion) — "(.+)"\.$/.exec(step.title?.trim() ?? "");
-    if (!match) {
+    const name = extractOutcomeName(step);
+    if (!name || seen.has(name)) {
       continue;
     }
-    const name = match[1];
-    if (!seen.has(name)) {
-      seen.add(name);
-      names.push(name);
-    }
+    seen.add(name);
+    names.push(name);
   }
 
   return names;
-}
-
-function assignKeywords(steps: ScenarioStep[]): BuiltGherkinStep["keyword"][] {
-  const keywords: BuiltGherkinStep["keyword"][] = [];
-  let isFirstAction = true;
-  let needWhen = false;
-
-  for (const step of steps) {
-    if (isThenStep(step)) {
-      keywords.push("Then");
-      needWhen = true;
-      continue;
-    }
-
-    if (isFirstAction) {
-      keywords.push("Given");
-      isFirstAction = false;
-      needWhen = true;
-      continue;
-    }
-
-    if (needWhen) {
-      keywords.push("When");
-      needWhen = false;
-      continue;
-    }
-
-    keywords.push("And");
-  }
-
-  return keywords;
 }
 
 function isThenStep(step: ScenarioStep): boolean {

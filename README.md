@@ -2,16 +2,20 @@
 
 Generate a Word document from a scenario actions JSON export.
 
-The generator converts the JSON into Gherkin source, parses it with the official [`@cucumber/gherkin`](https://github.com/cucumber/gherkin) parser, then writes a Word document from that AST. For each step it includes:
+Output layout (based on sample A):
 
-- placeholder variables in the step text when input values are present
-- a data table parsed from the Gherkin step
-- screenshots from `screenShots`, when they are embedded as `data:image/...;base64,...`
+- scenario title, description, and tags
+- `Scenario` heading
+- each step title only (no numbering, no Given/When/Then keywords added)
+- a `Text Value` table when input data is present (Type / Position omitted for now)
+- embedded screenshots under the step (no "Screenshot" label; multiple images per step supported)
+- one blank line between steps
 
 ## Usage
 
 ```bash
 npm install
+python3 -m pip install -r requirements.txt
 npm run generate:sample
 ```
 
@@ -25,4 +29,4 @@ npm start -- /path/to/scenario-actions.json --out output/scenario.docx
 
 ## Screenshot Retrieval
 
-The current implementation supports screenshots that are already embedded in the JSON as data URIs. If screenshots need to be fetched with service-account credentials, resolve them before screenshot parsing in `src/generateScenarioDoc.ts` so the Gherkin formatting flow can stay the same.
+Screenshots are read from each step's `screenShots` entries as `data:image/...;base64,...` values when embedded in the JSON. Service-account fetch can be added later if screenshots arrive as remote references.
