@@ -9,6 +9,10 @@ export type ScenarioExport = {
   title?: string;
   description?: string;
   scenarioTags?: string[];
+  feature?: string;
+  featureName?: string;
+  testSuite?: string;
+  suite?: string;
   pages?: Array<{ title?: string; url?: string }>;
   steps?: ScenarioStep[];
 };
@@ -44,6 +48,8 @@ type DocManifest = {
   title: string;
   description: string;
   tags: string[];
+  feature: string;
+  testSuite: string;
   sourceLabel: string;
   steps: ManifestStep[];
 };
@@ -78,6 +84,7 @@ async function buildManifest(
 ): Promise<DocManifest> {
   const steps: ManifestStep[] = [];
   const rawSteps = scenario.steps ?? [];
+  const keywords = assignKeywords(rawSteps);
 
   for (let index = 0; index < rawSteps.length; index += 1) {
     const step = rawSteps[index];
@@ -92,7 +99,7 @@ async function buildManifest(
     }
 
     steps.push({
-      text: cleanStepTitle(step.title),
+      text: `${keywords[index]} ${cleanStepTitle(step.title)}`,
       table: buildVariableTable(step),
       screenshotPaths,
     });
@@ -102,6 +109,8 @@ async function buildManifest(
     title: resolveTitle(scenario),
     description: scenario.description?.trim() ?? "",
     tags: (scenario.scenarioTags ?? []).map((tag) => String(tag).trim()).filter(Boolean),
+    feature: (scenario.feature ?? scenario.featureName ?? "").trim(),
+    testSuite: (scenario.testSuite ?? scenario.suite ?? "").trim(),
     sourceLabel: basename(inputPath),
     steps,
   };
@@ -118,6 +127,40 @@ function cleanStepTitle(title: string | undefined): string {
 
   // Capitalize the first letter so sentences read like sample A.
   return withoutKeyword.charAt(0).toUpperCase() + withoutKeyword.slice(1);
+}
+
+type Keyword = "Given" | "When" | "Then" | "And";
+
+function assignKeywords(steps: ScenarioStep[]): Keyword[] {
+  const keywords: Keyword[] = [];
+  let introducedGiven = false;
+  let needWhen = false;
+
+  for (const step of steps) {
+    let keyword: Keyword;
+
+    if (isThenStep(step)) {
+      keyword = "Then";
+      needWhen = true;
+    } else if (!introducedGiven) {
+      keyword = "Given";
+      introducedGiven = true;
+      needWhen = true;
+    } else if (needWhen) {
+      keyword = "When";
+      needWhen = false;
+    } else {
+      keyword = "And";
+    }
+
+    keywords.push(keyword);
+  }
+
+  return keywords;
+}
+
+function isThenStep(step: ScenarioStep): boolean {
+  return /^\s*I see /i.test(step.title ?? "");
 }
 
 function buildVariableTable(step: ScenarioStep): string[][] {
@@ -190,11 +233,16 @@ function resolveTitle(scenario: ScenarioExport): string {
 
 function runPythonBuilder(manifestPath: string, outputPath: string): Promise<void> {
   const scriptPath = resolve(process.cwd(), "scripts/build_docx.py");
+  const templatePath = resolve(process.cwd(), "assets/clear-sky-template.docx");
 
   return new Promise((resolvePromise, reject) => {
-    const child = spawn("python3", [scriptPath, manifestPath, "--out", outputPath], {
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    const child = spawn(
+      "python3",
+      [scriptPath, manifestPath, "--out", outputPath, "--template", templatePath],
+      {
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
 
     let stderr = "";
     child.stderr.on("data", (chunk: Buffer) => {
