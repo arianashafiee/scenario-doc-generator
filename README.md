@@ -125,16 +125,28 @@ The same code also deploys as a **Cloud Run function** (2nd-gen Cloud Function).
 entry point is `generate` in `main.py` (functions-framework); no Dockerfile is used —
 Google buildpacks read `requirements.txt` and `main.py`.
 
+The quickest path is the bundled script, which enables the required APIs, grants the
+runtime service account its roles, and deploys — run it from an authenticated `gcloud`
+session with deploy rights:
+
+```bash
+./deploy.sh
+```
+
+Or run the deploy manually:
+
 ```bash
 gcloud functions deploy scenario-doc-generator \
   --gen2 --runtime python312 --region "$REGION" \
   --source . --entry-point generate --trigger-http --allow-unauthenticated \
+  --service-account YOUR_RUNTIME_SA \
   --set-env-vars "GCS_BUCKET=$BUCKET,GCS_PREFIX=scenarios/"
 ```
 
 Grant the function's runtime service account the same two roles shown above
 (`storage.objectAdmin` on the bucket + `iam.serviceAccountTokenCreator` on itself), and
-enable `iamcredentials.googleapis.com`.
+enable `iamcredentials.googleapis.com`. Do **not** set `GOOGLE_APPLICATION_CREDENTIALS`
+in the cloud — the runtime service account signs via IAM.
 
 Run the function locally exactly as the cloud runs it:
 

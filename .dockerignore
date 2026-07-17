@@ -8,6 +8,7 @@ docs
 sample-outputs
 *.md
 .env
+.secrets
 .venv
 __pycache__
 *.pyc
