@@ -1,0 +1,20 @@
+# Files not needed by the deployed Python function/service.
+.git/
+.gitignore
+.gcloudignore
+.dockerignore
+node_modules/
+.venv/
+output/
+dist/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+*.log
+
+# TypeScript CLI is not used by the Cloud Run function/service.
+src/
+tsconfig.json
+package.json
+package-lock.json
